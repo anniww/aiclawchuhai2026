@@ -6,6 +6,13 @@ account_id = "53b7b68edccc6370375ce7cfa9eb8300"
 
 [vars]
 ADMIN_USERNAME = "admin"
+SITE_NAME = "AI落地页管理系统"
+SITE_URL = "https://aiclawchuhai.shop"
+GITHUB_REPO = "anniww/aiclawchuhai2026"
+GITHUB_PAGES_BRANCH = "gh-pages"
+CF_ACCOUNT_ID = "53b7b68edccc6370375ce7cfa9eb8300"
+GOOGLE_PROJECT_ID = "master-chariot-494401-t5"
+GOOGLE_CLIENT_EMAIL = "aiclawchuhai@master-chariot-494401-t5.iam.gserviceaccount.com"
 
 [[d1_databases]]
 binding = "DB"
@@ -17,4 +24,4 @@ binding = "KV"
 id = "00366001e70f4fc9b12daab1f7cba4c8"
 
 [triggers]
-crons = ["0 2 * * *"]
+crons = ["0 2 * * *", "0 3 * * *", "0 4 * * 1"]

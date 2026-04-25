@@ -1,614 +1,413 @@
 /**
  * AI Landing Page Generation Module
- * POST /api/ai/generate       → generate single landing page
- * POST /api/ai/batch-generate → batch generate multiple pages
- * GET  /api/ai/templates      → list available templates
+ * Supports: Cloudflare Workers AI, OpenAI-compatible API
+ * Features: GEO localization, SEO optimization, multi-language, multi-template
  */
+import { jsonResponse, errorResponse, requireAuth, generateSlug, logAudit, getClientIP } from './utils.js';
 
-import { jsonResponse, errorResponse, generateSlug, logAudit } from './utils.js';
+// ─── GEO Language Map ────────────────────────────────────────────────────────
+const GEO_CONFIG = {
+  CN: { lang: 'zh', langName: '中文', currency: 'CNY', timezone: 'Asia/Shanghai' },
+  US: { lang: 'en', langName: 'English', currency: 'USD', timezone: 'America/New_York' },
+  GB: { lang: 'en', langName: 'English', currency: 'GBP', timezone: 'Europe/London' },
+  DE: { lang: 'de', langName: 'Deutsch', currency: 'EUR', timezone: 'Europe/Berlin' },
+  FR: { lang: 'fr', langName: 'Français', currency: 'EUR', timezone: 'Europe/Paris' },
+  JP: { lang: 'ja', langName: '日本語', currency: 'JPY', timezone: 'Asia/Tokyo' },
+  KR: { lang: 'ko', langName: '한국어', currency: 'KRW', timezone: 'Asia/Seoul' },
+  ES: { lang: 'es', langName: 'Español', currency: 'EUR', timezone: 'Europe/Madrid' },
+  BR: { lang: 'pt', langName: 'Português', currency: 'BRL', timezone: 'America/Sao_Paulo' },
+  AU: { lang: 'en', langName: 'English', currency: 'AUD', timezone: 'Australia/Sydney' },
+  CA: { lang: 'en', langName: 'English', currency: 'CAD', timezone: 'America/Toronto' },
+  IN: { lang: 'en', langName: 'English', currency: 'INR', timezone: 'Asia/Kolkata' },
+  SG: { lang: 'en', langName: 'English', currency: 'SGD', timezone: 'Asia/Singapore' },
+  HK: { lang: 'zh', langName: '繁體中文', currency: 'HKD', timezone: 'Asia/Hong_Kong' },
+  TW: { lang: 'zh', langName: '繁體中文', currency: 'TWD', timezone: 'Asia/Taipei' },
+  TH: { lang: 'th', langName: 'ภาษาไทย', currency: 'THB', timezone: 'Asia/Bangkok' },
+  VN: { lang: 'vi', langName: 'Tiếng Việt', currency: 'VND', timezone: 'Asia/Ho_Chi_Minh' },
+  MY: { lang: 'ms', langName: 'Bahasa Melayu', currency: 'MYR', timezone: 'Asia/Kuala_Lumpur' },
+  ID: { lang: 'id', langName: 'Bahasa Indonesia', currency: 'IDR', timezone: 'Asia/Jakarta' },
+  AE: { lang: 'ar', langName: 'العربية', currency: 'AED', timezone: 'Asia/Dubai' },
+  SA: { lang: 'ar', langName: 'العربية', currency: 'SAR', timezone: 'Asia/Riyadh' },
+  MX: { lang: 'es', langName: 'Español', currency: 'MXN', timezone: 'America/Mexico_City' },
+  RU: { lang: 'ru', langName: 'Русский', currency: 'RUB', timezone: 'Europe/Moscow' },
+  IT: { lang: 'it', langName: 'Italiano', currency: 'EUR', timezone: 'Europe/Rome' },
+  NL: { lang: 'nl', langName: 'Nederlands', currency: 'EUR', timezone: 'Europe/Amsterdam' },
+  PL: { lang: 'pl', langName: 'Polski', currency: 'PLN', timezone: 'Europe/Warsaw' },
+  TR: { lang: 'tr', langName: 'Türkçe', currency: 'TRY', timezone: 'Europe/Istanbul' },
+  ZA: { lang: 'en', langName: 'English', currency: 'ZAR', timezone: 'Africa/Johannesburg' },
+  NG: { lang: 'en', langName: 'English', currency: 'NGN', timezone: 'Africa/Lagos' },
+  EG: { lang: 'ar', langName: 'العربية', currency: 'EGP', timezone: 'Africa/Cairo' },
+  PK: { lang: 'ur', langName: 'اردو', currency: 'PKR', timezone: 'Asia/Karachi' },
+  BD: { lang: 'bn', langName: 'বাংলা', currency: 'BDT', timezone: 'Asia/Dhaka' },
+};
+
+// ─── Industry Templates ──────────────────────────────────────────────────────
+const INDUSTRY_TEMPLATES = {
+  legal: { name: '法律服务', icon: '⚖️', keywords: ['律师', '法律咨询', '法律援助', '诉讼', '合同'] },
+  medical: { name: '医疗健康', icon: '🏥', keywords: ['医院', '诊所', '医生', '健康', '医疗'] },
+  ecommerce: { name: '电商零售', icon: '🛒', keywords: ['购物', '优惠', '折扣', '快递', '正品'] },
+  education: { name: '教育培训', icon: '📚', keywords: ['课程', '培训', '学习', '考试', '证书'] },
+  finance: { name: '金融理财', icon: '💰', keywords: ['投资', '理财', '贷款', '保险', '基金'] },
+  realestate: { name: '房产中介', icon: '🏠', keywords: ['房屋', '租房', '买房', '二手房', '新房'] },
+  travel: { name: '旅游酒店', icon: '✈️', keywords: ['旅游', '酒店', '机票', '景点', '行程'] },
+  restaurant: { name: '餐饮美食', icon: '🍜', keywords: ['美食', '餐厅', '外卖', '菜单', '预订'] },
+  beauty: { name: '美容美发', icon: '💄', keywords: ['美容', '护肤', '美发', '造型', '美甲'] },
+  tech: { name: '科技软件', icon: '💻', keywords: ['软件', '应用', '技术', '开发', '解决方案'] },
+  fitness: { name: '健身运动', icon: '💪', keywords: ['健身', '运动', '减肥', '塑形', '教练'] },
+  pet: { name: '宠物服务', icon: '🐾', keywords: ['宠物', '狗', '猫', '宠物医院', '宠物用品'] },
+  wedding: { name: '婚庆婚礼', icon: '💍', keywords: ['婚礼', '婚庆', '婚纱', '婚宴', '策划'] },
+  cleaning: { name: '家政清洁', icon: '🧹', keywords: ['保洁', '家政', '清洁', '上门服务', '家庭'] },
+  logistics: { name: '物流快递', icon: '📦', keywords: ['物流', '快递', '运输', '仓储', '配送'] },
+  default: { name: '通用服务', icon: '🌟', keywords: ['服务', '专业', '优质', '品牌', '口碑'] },
+};
 
 export async function handleAI(request, env, path) {
-  if (path === '/api/ai/generate' && request.method === 'POST') {
-    return await generatePage(request, env);
-  }
-  if (path === '/api/ai/batch-generate' && request.method === 'POST') {
-    return await batchGenerate(request, env);
-  }
-  if (path === '/api/ai/templates' && request.method === 'GET') {
-    return jsonResponse(TEMPLATES);
-  }
+  // Auth check for all AI endpoints
+  const auth = await requireAuth(request, env);
+  if (auth.error) return auth.error;
+
+  if (path === '/api/ai/generate' && request.method === 'POST') return handleGenerate(request, env, auth.user);
+  if (path === '/api/ai/batch-generate' && request.method === 'POST') return handleBatchGenerate(request, env, auth.user);
+  if (path === '/api/ai/optimize' && request.method === 'POST') return handleOptimize(request, env, auth.user);
+  if (path === '/api/ai/keywords' && request.method === 'POST') return handleKeywords(request, env, auth.user);
+  if (path === '/api/ai/templates' && request.method === 'GET') return jsonResponse(Object.entries(INDUSTRY_TEMPLATES).map(([k,v]) => ({ id: k, ...v })));
+  if (path === '/api/ai/geo-config' && request.method === 'GET') return jsonResponse(Object.entries(GEO_CONFIG).map(([k,v]) => ({ country: k, ...v })));
+  if (path === '/api/ai/suggest-keywords' && request.method === 'POST') return handleSuggestKeywords(request, env, auth.user);
+  if (path === '/api/ai/write-assist' && request.method === 'POST') return handleWriteAssist(request, env, auth.user);
+  if (path === '/api/ai/presets' && request.method === 'GET') return handleGetPresets(request, env);
+  if (path === '/api/seo/status' && request.method === 'GET') return handleSEOStatus(request, env);
+  if (path === '/api/seo/submit-all' && request.method === 'POST') return handleSEOSubmitAll(request, env, auth.user);
+  if (path === '/api/seo/submit-url' && request.method === 'POST') return handleSEOSubmitUrl(request, env, auth.user);
   return errorResponse('Not Found', 404);
 }
 
-// ─── Templates ─────────────────────────────────────────────────────────────
-const TEMPLATES = [
-  { id: 'law-firm', name: '律师事务所', category: 'legal', description: '专业法律服务落地页' },
-  { id: 'immigration', name: '移民服务', category: 'legal', description: '移民咨询服务落地页' },
-  { id: 'consulting', name: '商务咨询', category: 'business', description: '商务顾问服务落地页' },
-  { id: 'saas', name: 'SaaS 产品', category: 'tech', description: '软件产品推广落地页' },
-  { id: 'ecommerce', name: '电商产品', category: 'ecommerce', description: '产品销售落地页' },
-  { id: 'local-service', name: '本地服务', category: 'local', description: '本地商家服务落地页' },
-  { id: 'education', name: '教育培训', category: 'education', description: '课程培训落地页' },
-  { id: 'healthcare', name: '医疗健康', category: 'health', description: '医疗健康服务落地页' },
-];
-
-// ─── Single Page Generation ────────────────────────────────────────────────
-async function generatePage(request, env) {
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid request body', 400);
-  }
-
-  const {
-    business_name,
-    business_type = 'law-firm',
-    service = '法律咨询',
-    city = '上海',
-    country = 'CN',
-    lang = 'zh',
-    keywords = '',
-    phone = '',
-    email = '',
-    address = '',
-    template = 'law-firm',
-    save = true,
-    custom_prompt = ''
-  } = body;
-
-  if (!business_name) return errorResponse('business_name 不能为空', 400);
-
-  const prompt = custom_prompt || buildPrompt({
-    business_name, business_type, service, city, country, lang, keywords, phone, email, address, template
-  });
-
-  let htmlContent;
-  try {
-    htmlContent = await callAI(env, prompt, business_name, service, city, lang, template);
-  } catch (e) {
-    return errorResponse('AI 生成失败: ' + e.message, 500);
-  }
-
-  const slug = generateSlug(`${business_name}-${service}-${city}`);
-  const title = `${business_name} - ${service} - ${city}`;
-
-  if (save) {
+async function callAI(env, prompt, systemPrompt = '') {
+  // Try OpenAI-compatible API first (via env.OPENAI_API_KEY)
+  if (env.OPENAI_API_KEY) {
     try {
-      const result = await env.DB.prepare(`
-        INSERT INTO pages (slug, title, html_content, keywords, description, meta_title, meta_desc,
-          lang, country, city, status, noindex, template, views, indexed, has_password,
-          created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 0, ?, 0, 0, 0, datetime('now'), datetime('now'))
-      `).bind(
-        slug, title, htmlContent,
-        keywords || `${service},${city},${business_name}`,
-        `${business_name}专业提供${service}服务，服务${city}及周边地区`,
-        title,
-        `${business_name}提供专业${service}，${city}本地服务，立即咨询`,
-        lang, country, city, template
-      ).run();
-
-      await logAudit(env, 'AI_GENERATE', `slug: ${slug}`);
-      return jsonResponse({ slug, title, id: result.meta?.last_row_id, preview_url: `/p/${slug}` }, 201);
-    } catch (e) {
-      return errorResponse('保存失败: ' + e.message, 500);
-    }
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: systemPrompt || 'You are an expert SEO copywriter and web developer.' },
+            { role: 'user', content: prompt }
+          ],
+          max_tokens: 4000,
+          temperature: 0.7,
+        }),
+      });
+      const data = await resp.json();
+      if (data.choices && data.choices[0]) return data.choices[0].message.content;
+    } catch (e) { console.error('OpenAI error:', e); }
   }
 
-  return jsonResponse({ slug, title, html_content: htmlContent });
+  // Fallback: Cloudflare Workers AI
+  if (env.AI) {
+    try {
+      const messages = [];
+      if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+      messages.push({ role: 'user', content: prompt });
+      const resp = await env.AI.run('@cf/meta/llama-3-8b-instruct', { messages, max_tokens: 3000 });
+      return resp.response || '';
+    } catch (e) { console.error('Workers AI error:', e); }
+  }
+
+  throw new Error('No AI service available. Please configure OPENAI_API_KEY or enable Workers AI.');
 }
 
-// ─── Batch Generation ──────────────────────────────────────────────────────
-async function batchGenerate(request, env) {
+async function handleGenerate(request, env, user) {
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid request body', 400);
-  }
+  try { body = await request.json(); } catch { return errorResponse('请求格式错误', 400); }
 
-  const { items, template = 'law-firm', lang = 'zh' } = body;
-  if (!Array.isArray(items) || items.length === 0) return errorResponse('items 不能为空', 400);
-  if (items.length > 20) return errorResponse('单次批量最多20条', 400);
+  const {
+    title, keywords = '', industry = 'default', country = 'CN', city = '',
+    lang, template = 'modern', customPrompt = '', whatsapp = '',
+    googleAnalyticsId = '', facebookPixelId = '', noindex = false,
+    password = '', saveAsDraft = false
+  } = body;
+
+  if (!title) return errorResponse('标题不能为空', 400);
+
+  const geo = GEO_CONFIG[country] || GEO_CONFIG['CN'];
+  const pageLang = lang || geo.lang;
+  const industryConfig = INDUSTRY_TEMPLATES[industry] || INDUSTRY_TEMPLATES['default'];
+
+  const systemPrompt = `You are an expert SEO copywriter and web developer specializing in creating high-converting landing pages. 
+You write in ${geo.langName} (${pageLang}) for the ${country} market.
+You understand local culture, business practices, and consumer behavior in ${country}.
+Always output complete, valid HTML with embedded CSS and JavaScript.`;
+
+  const prompt = `Create a complete, professional, high-converting landing page HTML for the following:
+
+Title: ${title}
+Industry: ${industryConfig.name}
+Target Country: ${country}
+Target City: ${city || 'nationwide'}
+Language: ${geo.langName} (${pageLang})
+Keywords: ${keywords || industryConfig.keywords.join(', ')}
+Template Style: ${template}
+${customPrompt ? `Additional Requirements: ${customPrompt}` : ''}
+
+Requirements:
+1. Complete HTML5 document with embedded CSS (modern, responsive, mobile-first design)
+2. SEO optimized: proper title, meta description, H1-H6 hierarchy, alt tags
+3. Schema.org LocalBusiness structured data in JSON-LD
+4. GEO localization: local currency (${geo.currency}), phone format, address format for ${country}
+5. FAQ section with 5+ relevant questions in ${geo.langName}
+6. Call-to-action buttons (WhatsApp: ${whatsapp || '+1234567890'}, contact form)
+7. Hreflang tag for ${pageLang}-${country.toLowerCase()}
+8. Fast loading: lazy images, minimal external dependencies
+9. Trust signals: testimonials, certifications, guarantees
+10. Footer with legal pages (Privacy Policy, Terms of Service)
+${city ? `11. Local SEO: mention ${city} prominently, include map embed placeholder` : ''}
+${googleAnalyticsId ? `12. Google Analytics 4: ${googleAnalyticsId}` : ''}
+${facebookPixelId ? `13. Facebook Pixel: ${facebookPixelId}` : ''}
+
+Output ONLY the complete HTML document, no explanations.`;
+
+  try {
+    const html = await callAI(env, prompt, systemPrompt);
+
+    // Extract meta info from generated HTML
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i);
+    const metaTitle = titleMatch ? titleMatch[1] : title;
+    const metaDesc = descMatch ? descMatch[1] : `${title} - ${country} ${city}`;
+
+    const slug = generateSlug(title);
+    const status = saveAsDraft ? 'draft' : 'published';
+
+    // Save to DB
+    const result = await env.DB.prepare(`
+      INSERT INTO pages (slug, title, html_content, keywords, description, meta_title, meta_desc, lang, country, city, status, noindex, template, has_password, password_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      slug, title, html, keywords, metaDesc, metaTitle, metaDesc,
+      pageLang, country, city, status,
+      noindex ? 1 : 0, template,
+      password ? 1 : 0,
+      password ? await sha256Simple(password) : null
+    ).run();
+
+    await logAudit(env, 'ai_generate', `AI生成落地页: ${title} [${country}/${pageLang}]`, user.username);
+
+    return jsonResponse({
+      success: true,
+      slug,
+      title,
+      status,
+      url: `/${slug}`,
+      meta_title: metaTitle,
+      meta_desc: metaDesc,
+      lang: pageLang,
+      country,
+      html_preview: html.slice(0, 500) + '...',
+    });
+  } catch (e) {
+    return errorResponse(`AI生成失败: ${e.message}`, 500);
+  }
+}
+
+async function handleBatchGenerate(request, env, user) {
+  let body;
+  try { body = await request.json(); } catch { return errorResponse('请求格式错误', 400); }
+
+  const { items = [], defaultConfig = {} } = body;
+  if (!items.length) return errorResponse('批量生成列表不能为空', 400);
+  if (items.length > 20) return errorResponse('单次批量生成最多20条', 400);
 
   const results = [];
   for (const item of items) {
     try {
-      const fakeRequest = new Request('https://worker/api/ai/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...item, template, lang, save: true })
-      });
-      const res = await generatePage(fakeRequest, env);
-      const data = await res.json();
-      results.push({ ...item, ...data, success: res.status < 400 });
+      const config = { ...defaultConfig, ...item };
+      const geo = GEO_CONFIG[config.country || 'CN'] || GEO_CONFIG['CN'];
+      const pageLang = config.lang || geo.lang;
+      const industryConfig = INDUSTRY_TEMPLATES[config.industry || 'default'] || INDUSTRY_TEMPLATES['default'];
+
+      const prompt = `Create a complete SEO-optimized landing page HTML for:
+Title: ${config.title}
+Industry: ${industryConfig.name}
+Country: ${config.country || 'CN'}
+City: ${config.city || ''}
+Language: ${geo.langName}
+Keywords: ${config.keywords || industryConfig.keywords.join(', ')}
+
+Output ONLY complete HTML document.`;
+
+      const html = await callAI(env, prompt);
+      const slug = generateSlug(config.title);
+
+      await env.DB.prepare(`
+        INSERT INTO pages (slug, title, html_content, keywords, lang, country, city, status, template)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(slug, config.title, html, config.keywords || '', pageLang, config.country || 'CN', config.city || '', 'draft', config.template || 'modern').run();
+
+      results.push({ success: true, slug, title: config.title, url: `/${slug}` });
     } catch (e) {
-      results.push({ ...item, success: false, error: e.message });
+      results.push({ success: false, title: item.title, error: e.message });
     }
   }
 
-  await logAudit(env, 'BATCH_GENERATE', `count: ${items.length}, success: ${results.filter(r => r.success).length}`);
-  return jsonResponse({ results, total: items.length, success: results.filter(r => r.success).length });
+  await logAudit(env, 'ai_batch_generate', `批量生成 ${results.length} 个落地页`, user.username);
+  return jsonResponse({ success: true, total: results.length, results });
 }
 
-// ─── AI Prompt Builder ─────────────────────────────────────────────────────
-function buildPrompt({ business_name, service, city, country, lang, keywords, phone, email, address, template }) {
-  const langMap = { zh: '中文', en: 'English', ja: '日本語', ko: '한국어', es: 'Español' };
-  const langName = langMap[lang] || '中文';
+async function handleOptimize(request, env, user) {
+  let body;
+  try { body = await request.json(); } catch { return errorResponse('请求格式错误', 400); }
+  const { html, html_content, optimization_type, type: bodyType, lang = 'zh' } = body;
+  const type = bodyType || optimization_type || 'full';
+  const htmlContent = html || html_content;
+  if (!htmlContent) return errorResponse('HTML内容不能为空', 400);
 
-  return `你是一位专业的SEO落地页设计师和前端开发者。请为以下业务生成一个完整的、高质量的HTML落地页。
+  const typeMap = {
+    full: '全面优化：改善SEO、提升转化率、优化文案、增强用户体验',
+    seo: '专注SEO优化：改善标题、描述、关键词密度、内链结构',
+    copy: '专注文案优化：使内容更有说服力、更吸引人、更专业',
+    cta: '专注转化优化：改善CTA按钮、表单、信任信号',
+  };
 
-业务信息：
-- 公司名称：${business_name}
-- 服务类型：${service}
-- 所在城市：${city}
-- 国家/地区：${country}
-- 页面语言：${langName}
-- 关键词：${keywords || service + ',' + city}
-- 联系电话：${phone || '请填写电话'}
-- 邮箱：${email || '请填写邮箱'}
-- 地址：${address || city + '市中心'}
+  const prompt = `${typeMap[type] || typeMap.full}以下HTML落地页内容（保持语言为${lang}）：
+
+${htmlContent.slice(0, 8000)}
+
+输出优化后的完整HTML，不要解释。`;
+
+  try {
+    const optimized = await callAI(env, prompt);
+    return jsonResponse({ success: true, html: optimized, optimized_content: optimized });
+  } catch (e) {
+    return errorResponse(`优化失败: ${e.message}`, 500);
+  }
+}
+
+async function handleKeywords(request, env, user) {
+  let body;
+  try { body = await request.json(); } catch { return errorResponse('请求格式错误', 400); }
+  const { topic, country = 'CN', industry = 'default', count = 20 } = body;
+  if (!topic) return errorResponse('主题不能为空', 400);
+
+  const geo = GEO_CONFIG[country] || GEO_CONFIG['CN'];
+  const prompt = `作为SEO专家，为以下主题生成${count}个高价值SEO关键词：
+主题：${topic}
+目标市场：${country}（${geo.langName}）
+行业：${(INDUSTRY_TEMPLATES[industry] || INDUSTRY_TEMPLATES['default']).name}
 
 要求：
-1. 生成完整的单文件HTML（包含内联CSS和JS）
-2. 现代化响应式设计，适配手机和电脑
-3. 包含以下SEO元素：
-   - 完整的TDK（title、description、keywords）
-   - H1/H2/H3标签层级结构
-   - LocalBusiness JSON-LD结构化数据
-   - Open Graph标签
-   - Hreflang标签（如适用）
-   - Canonical URL
-4. 页面内容包含：
-   - 专业导航栏（含Logo文字和联系按钮）
-   - Hero区域（大标题、副标题、CTA按钮）
-   - 服务特色（3-6个服务亮点卡片）
-   - 关于我们（简介段落）
-   - FAQ常见问题（5个问答，使用FAQ Schema）
-   - 联系方式（电话、邮箱、地址）
-   - 页脚（版权信息、隐私政策链接）
-5. 颜色方案：专业商务风格，主色调蓝色系或深色系
-6. 包含WhatsApp咨询按钮（悬浮右下角）
-7. 图片使用Unsplash随机图片URL（相关主题）
-8. 不要使用外部CSS框架，全部内联样式
-9. 防重复内容：使用独特的文案描述，避免模板化
+1. 包含长尾关键词（3-5词）
+2. 包含本地化关键词（含城市/地区）
+3. 包含问题型关键词（如何、什么、为什么）
+4. 按搜索意图分类（信息型/商业型/交易型）
+5. 用JSON数组格式输出，每项包含：keyword, type(info/commercial/transactional), difficulty(low/medium/high), intent
 
-只输出完整的HTML代码，不要任何解释文字。`;
-}
+只输出JSON数组，不要其他内容。`;
 
-// ─── AI Call ───────────────────────────────────────────────────────────────
-async function callAI(env, prompt, business_name, service, city, lang, template) {
-  // Try Workers AI first (if available)
-  if (env.AI) {
+  try {
+    const result = await callAI(env, prompt);
+    let keywords;
     try {
-      const response = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
-        messages: [
-          { role: 'system', content: '你是专业的SEO落地页生成器，只输出完整HTML代码。' },
-          { role: 'user', content: prompt }
-        ],
-        max_tokens: 4096
-      });
-      if (response?.response) return response.response;
-    } catch (e) {
-      console.error('Workers AI error:', e);
-    }
+      const jsonMatch = result.match(/\[[\s\S]*\]/);
+      keywords = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+    } catch { keywords = []; }
+    return jsonResponse({ success: true, keywords, topic, country });
+  } catch (e) {
+    return errorResponse(`关键词生成失败: ${e.message}`, 500);
   }
-
-  // Fallback: generate template-based HTML
-  return generateTemplateHTML({ business_name, service, city, lang, template });
 }
 
-// ─── Template-based HTML Generator (fallback) ─────────────────────────────
-function generateTemplateHTML({ business_name, service, city, lang, template }) {
-  const isEn = lang === 'en';
-  const heroTitle = isEn
-    ? `${business_name} - Professional ${service} in ${city}`
-    : `${business_name} - ${city}专业${service}`;
-  const heroSubtitle = isEn
-    ? `Trusted by hundreds of clients in ${city}. Expert ${service} services tailored to your needs.`
-    : `服务${city}数百客户，专业${service}，为您量身定制解决方案`;
-  const ctaText = isEn ? 'Get Free Consultation' : '免费咨询';
-  const colors = getTemplateColors(template);
-
-  return `<!DOCTYPE html>
-<html lang="${lang}" prefix="og: http://ogp.me/ns#">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${heroTitle}</title>
-<meta name="description" content="${heroSubtitle}">
-<meta name="keywords" content="${service},${city},${business_name}">
-<meta property="og:title" content="${heroTitle}">
-<meta property="og:description" content="${heroSubtitle}">
-<meta property="og:type" content="website">
-<link rel="canonical" href="">
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "LocalBusiness",
-  "name": "${business_name}",
-  "description": "${heroSubtitle}",
-  "address": {
-    "@type": "PostalAddress",
-    "addressLocality": "${city}"
-  },
-  "serviceArea": "${city}"
-}
-</script>
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "FAQPage",
-  "mainEntity": [
-    {
-      "@type": "Question",
-      "name": "${isEn ? 'What services do you offer?' : '你们提供哪些服务？'}",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "${isEn ? `We provide comprehensive ${service} services in ${city}.` : `我们在${city}提供全面的${service}服务，包括咨询、规划和执行。`}"
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "${isEn ? 'How can I contact you?' : '如何联系你们？'}",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "${isEn ? 'You can reach us via phone, email, or the contact form on this page.' : '您可以通过电话、邮件或页面上的联系表单联系我们。'}"
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "${isEn ? 'Do you offer free consultations?' : '是否提供免费咨询？'}",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "${isEn ? 'Yes, we offer a free initial consultation for all new clients.' : '是的，我们为所有新客户提供免费初次咨询服务。'}"
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "${isEn ? `Are you based in ${city}?` : `你们在${city}有办公室吗？`}",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "${isEn ? `Yes, we are locally based in ${city} and serve clients throughout the region.` : `是的，我们在${city}设有办公室，服务本地及周边客户。`}"
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "${isEn ? 'What makes you different?' : '你们有什么优势？'}",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "${isEn ? `Our team brings years of experience in ${service}, with a client-first approach and proven results.` : `我们团队拥有多年${service}经验，以客户为中心，成果有目共睹。`}"
-      }
-    }
-  ]
-}
-</script>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
-    --primary: ${colors.primary};
-    --secondary: ${colors.secondary};
-    --accent: ${colors.accent};
-    --text: #1a1a2e;
-    --text-light: #6b7280;
-    --bg: #ffffff;
-    --bg-alt: #f8fafc;
-  }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text); line-height: 1.6; }
-  a { color: var(--primary); text-decoration: none; }
-  img { max-width: 100%; height: auto; }
-  .container { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
-
-  /* Nav */
-  nav { background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 100; }
-  .nav-inner { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; max-width: 1200px; margin: 0 auto; }
-  .logo { font-size: 20px; font-weight: 700; color: var(--primary); }
-  .nav-cta { background: var(--primary); color: white; padding: 10px 24px; border-radius: 8px; font-weight: 600; transition: opacity 0.2s; }
-  .nav-cta:hover { opacity: 0.9; color: white; }
-
-  /* Hero */
-  .hero { background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%); color: white; padding: 100px 20px; text-align: center; }
-  .hero h1 { font-size: clamp(28px, 5vw, 52px); font-weight: 800; margin-bottom: 20px; line-height: 1.2; }
-  .hero p { font-size: clamp(16px, 2vw, 20px); opacity: 0.9; max-width: 600px; margin: 0 auto 32px; }
-  .hero-btns { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
-  .btn-primary { background: white; color: var(--primary); padding: 14px 32px; border-radius: 50px; font-weight: 700; font-size: 16px; transition: transform 0.2s; }
-  .btn-primary:hover { transform: translateY(-2px); color: var(--primary); }
-  .btn-outline { border: 2px solid white; color: white; padding: 14px 32px; border-radius: 50px; font-weight: 600; font-size: 16px; transition: all 0.2s; }
-  .btn-outline:hover { background: white; color: var(--primary); }
-
-  /* Features */
-  .features { padding: 80px 20px; background: var(--bg-alt); }
-  .section-title { text-align: center; font-size: clamp(24px, 3vw, 36px); font-weight: 700; margin-bottom: 12px; }
-  .section-sub { text-align: center; color: var(--text-light); margin-bottom: 48px; font-size: 16px; }
-  .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
-  .feature-card { background: white; border-radius: 16px; padding: 32px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); transition: transform 0.2s; }
-  .feature-card:hover { transform: translateY(-4px); }
-  .feature-icon { font-size: 40px; margin-bottom: 16px; }
-  .feature-card h3 { font-size: 18px; font-weight: 700; margin-bottom: 8px; color: var(--text); }
-  .feature-card p { color: var(--text-light); font-size: 14px; line-height: 1.7; }
-
-  /* About */
-  .about { padding: 80px 20px; }
-  .about-inner { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; }
-  @media (max-width: 768px) { .about-inner { grid-template-columns: 1fr; } }
-  .about img { border-radius: 16px; width: 100%; height: 350px; object-fit: cover; }
-  .about h2 { font-size: clamp(22px, 3vw, 32px); font-weight: 700; margin-bottom: 16px; }
-  .about p { color: var(--text-light); line-height: 1.8; margin-bottom: 16px; }
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 24px; }
-  .stat { text-align: center; }
-  .stat-num { font-size: 28px; font-weight: 800; color: var(--primary); }
-  .stat-label { font-size: 12px; color: var(--text-light); }
-
-  /* FAQ */
-  .faq { padding: 80px 20px; background: var(--bg-alt); }
-  .faq-list { max-width: 800px; margin: 0 auto; }
-  .faq-item { background: white; border-radius: 12px; margin-bottom: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-  .faq-q { padding: 20px 24px; font-weight: 600; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
-  .faq-q:hover { background: var(--bg-alt); }
-  .faq-a { padding: 0 24px 20px; color: var(--text-light); line-height: 1.7; display: none; }
-  .faq-item.open .faq-a { display: block; }
-  .faq-item.open .faq-arrow { transform: rotate(180deg); }
-  .faq-arrow { transition: transform 0.2s; font-size: 12px; }
-
-  /* Contact */
-  .contact { padding: 80px 20px; }
-  .contact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; }
-  @media (max-width: 768px) { .contact-grid { grid-template-columns: 1fr; } }
-  .contact h2 { font-size: clamp(22px, 3vw, 32px); font-weight: 700; margin-bottom: 24px; }
-  .contact-info { display: flex; flex-direction: column; gap: 16px; }
-  .contact-item { display: flex; align-items: center; gap: 12px; }
-  .contact-icon { width: 40px; height: 40px; background: var(--bg-alt); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
-  .contact-form { display: flex; flex-direction: column; gap: 16px; }
-  .form-group { display: flex; flex-direction: column; gap: 6px; }
-  .form-group label { font-weight: 600; font-size: 14px; }
-  .form-group input, .form-group textarea, .form-group select {
-    padding: 12px 16px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 15px;
-    outline: none; transition: border-color 0.2s; font-family: inherit;
-  }
-  .form-group input:focus, .form-group textarea:focus { border-color: var(--primary); }
-  .form-group textarea { min-height: 120px; resize: vertical; }
-  .submit-btn { background: var(--primary); color: white; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
-  .submit-btn:hover { opacity: 0.9; }
-
-  /* Footer */
-  footer { background: #1a1a2e; color: #9ca3af; padding: 40px 20px; text-align: center; }
-  .footer-links { display: flex; justify-content: center; gap: 24px; margin-bottom: 16px; flex-wrap: wrap; }
-  .footer-links a { color: #9ca3af; font-size: 14px; }
-  .footer-links a:hover { color: white; }
-  footer p { font-size: 13px; }
-
-  /* WhatsApp Float */
-  .wa-float { position: fixed; bottom: 24px; right: 24px; z-index: 999; }
-  .wa-btn { width: 56px; height: 56px; background: #25d366; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 20px rgba(37,211,102,0.4); transition: transform 0.2s; }
-  .wa-btn:hover { transform: scale(1.1); }
-  .wa-btn svg { width: 28px; height: 28px; fill: white; }
-
-  @media (max-width: 768px) {
-    .hero { padding: 60px 20px; }
-    .features, .about, .faq, .contact { padding: 60px 20px; }
-    .stats { grid-template-columns: repeat(3, 1fr); }
-  }
-</style>
-</head>
-<body>
-
-<nav>
-  <div class="nav-inner">
-    <div class="logo">${business_name}</div>
-    <a href="#contact" class="nav-cta">${ctaText}</a>
-  </div>
-</nav>
-
-<section class="hero">
-  <div class="container">
-    <h1>${heroTitle}</h1>
-    <p>${heroSubtitle}</p>
-    <div class="hero-btns">
-      <a href="#contact" class="btn-primary">${ctaText}</a>
-      <a href="#features" class="btn-outline">${isEn ? 'Learn More' : '了解更多'}</a>
-    </div>
-  </div>
-</section>
-
-<section class="features" id="features">
-  <div class="container">
-    <h2 class="section-title">${isEn ? 'Our Services' : '我们的服务'}</h2>
-    <p class="section-sub">${isEn ? `Professional ${service} solutions for your needs` : `专业${service}解决方案，满足您的需求`}</p>
-    <div class="features-grid">
-      <div class="feature-card">
-        <div class="feature-icon">⚖️</div>
-        <h3>${isEn ? 'Expert Consultation' : '专业咨询'}</h3>
-        <p>${isEn ? `Our experienced team provides expert ${service} consultation tailored to your specific situation.` : `我们经验丰富的团队提供专业的${service}咨询，针对您的具体情况量身定制。`}</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🎯</div>
-        <h3>${isEn ? 'Customized Solutions' : '定制方案'}</h3>
-        <p>${isEn ? `Every client is unique. We develop personalized strategies that align with your goals.` : `每位客户都是独特的。我们制定与您目标一致的个性化策略。`}</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🛡️</div>
-        <h3>${isEn ? 'Full Support' : '全程支持'}</h3>
-        <p>${isEn ? `From initial consultation to final resolution, we support you every step of the way.` : `从初次咨询到最终解决，我们全程陪伴您每一步。`}</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">⚡</div>
-        <h3>${isEn ? 'Fast Response' : '快速响应'}</h3>
-        <p>${isEn ? `We understand urgency. Our team responds promptly to all inquiries within 24 hours.` : `我们理解紧迫性。我们的团队在24小时内及时响应所有咨询。`}</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🌍</div>
-        <h3>${isEn ? `Local ${city} Expertise` : `${city}本地专家`}</h3>
-        <p>${isEn ? `Deep knowledge of local regulations and market conditions in ${city}.` : `深入了解${city}当地法规和市场情况。`}</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">✅</div>
-        <h3>${isEn ? 'Proven Results' : '成果显著'}</h3>
-        <p>${isEn ? `Track record of successful outcomes for hundreds of satisfied clients.` : `数百名满意客户的成功案例，成果有目共睹。`}</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="about" id="about">
-  <div class="container">
-    <div class="about-inner">
-      <img src="https://images.unsplash.com/photo-1521791136064-7986c2920216?w=600&auto=format&fit=crop" alt="${business_name}" loading="lazy">
-      <div>
-        <h2>${isEn ? `About ${business_name}` : `关于${business_name}`}</h2>
-        <p>${isEn
-          ? `${business_name} is a leading provider of ${service} services in ${city}. With years of experience and a dedicated team of professionals, we have helped hundreds of clients achieve their goals.`
-          : `${business_name}是${city}领先的${service}服务提供商。凭借多年经验和专业团队，我们已帮助数百名客户实现目标。`}</p>
-        <p>${isEn
-          ? `Our commitment to excellence, integrity, and client satisfaction sets us apart. We combine deep expertise with personalized attention to deliver outstanding results.`
-          : `我们对卓越、诚信和客户满意度的承诺使我们与众不同。我们将深厚的专业知识与个性化关注相结合，提供卓越成果。`}</p>
-        <div class="stats">
-          <div class="stat"><div class="stat-num">500+</div><div class="stat-label">${isEn ? 'Clients' : '服务客户'}</div></div>
-          <div class="stat"><div class="stat-num">10+</div><div class="stat-label">${isEn ? 'Years' : '年经验'}</div></div>
-          <div class="stat"><div class="stat-num">98%</div><div class="stat-label">${isEn ? 'Satisfaction' : '满意率'}</div></div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="faq" id="faq">
-  <div class="container">
-    <h2 class="section-title">${isEn ? 'Frequently Asked Questions' : '常见问题'}</h2>
-    <p class="section-sub">${isEn ? 'Everything you need to know' : '您需要了解的一切'}</p>
-    <div class="faq-list">
-      <div class="faq-item open">
-        <div class="faq-q">${isEn ? 'What services do you offer?' : '你们提供哪些服务？'}<span class="faq-arrow">▼</span></div>
-        <div class="faq-a">${isEn ? `We provide comprehensive ${service} services in ${city}, including consultation, planning, and execution.` : `我们在${city}提供全面的${service}服务，包括咨询、规划和执行。`}</div>
-      </div>
-      <div class="faq-item">
-        <div class="faq-q">${isEn ? 'How can I contact you?' : '如何联系你们？'}<span class="faq-arrow">▼</span></div>
-        <div class="faq-a">${isEn ? 'You can reach us via phone, email, or the contact form below.' : '您可以通过电话、邮件或下方联系表单联系我们。'}</div>
-      </div>
-      <div class="faq-item">
-        <div class="faq-q">${isEn ? 'Do you offer free consultations?' : '是否提供免费咨询？'}<span class="faq-arrow">▼</span></div>
-        <div class="faq-a">${isEn ? 'Yes, we offer a free initial consultation for all new clients.' : '是的，我们为所有新客户提供免费初次咨询服务。'}</div>
-      </div>
-      <div class="faq-item">
-        <div class="faq-q">${isEn ? `Are you based in ${city}?` : `你们在${city}有办公室吗？`}<span class="faq-arrow">▼</span></div>
-        <div class="faq-a">${isEn ? `Yes, we are locally based in ${city}.` : `是的，我们在${city}设有办公室，服务本地及周边客户。`}</div>
-      </div>
-      <div class="faq-item">
-        <div class="faq-q">${isEn ? 'What makes you different?' : '你们有什么优势？'}<span class="faq-arrow">▼</span></div>
-        <div class="faq-a">${isEn ? `Our team brings years of experience in ${service} with a client-first approach.` : `我们团队拥有多年${service}经验，以客户为中心，成果有目共睹。`}</div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="contact" id="contact">
-  <div class="container">
-    <h2 class="section-title">${isEn ? 'Contact Us' : '联系我们'}</h2>
-    <p class="section-sub">${isEn ? 'Get in touch for a free consultation' : '立即联系，获取免费咨询'}</p>
-    <div class="contact-grid">
-      <div>
-        <div class="contact-info">
-          <div class="contact-item">
-            <div class="contact-icon">📍</div>
-            <div><strong>${isEn ? 'Address' : '地址'}</strong><br>${city}</div>
-          </div>
-          <div class="contact-item">
-            <div class="contact-icon">📞</div>
-            <div><strong>${isEn ? 'Phone' : '电话'}</strong><br>${isEn ? 'Please call us' : '请致电咨询'}</div>
-          </div>
-          <div class="contact-item">
-            <div class="contact-icon">✉️</div>
-            <div><strong>${isEn ? 'Email' : '邮箱'}</strong><br>${isEn ? 'Send us an email' : '发送邮件咨询'}</div>
-          </div>
-          <div class="contact-item">
-            <div class="contact-icon">🕒</div>
-            <div><strong>${isEn ? 'Hours' : '工作时间'}</strong><br>${isEn ? 'Mon-Fri 9am-6pm' : '周一至周五 9:00-18:00'}</div>
-          </div>
-        </div>
-      </div>
-      <form class="contact-form" onsubmit="handleSubmit(event)">
-        <div class="form-group">
-          <label>${isEn ? 'Your Name' : '您的姓名'}</label>
-          <input type="text" placeholder="${isEn ? 'Full Name' : '请输入姓名'}" required>
-        </div>
-        <div class="form-group">
-          <label>${isEn ? 'Phone / Email' : '电话/邮箱'}</label>
-          <input type="text" placeholder="${isEn ? 'Contact info' : '请输入联系方式'}" required>
-        </div>
-        <div class="form-group">
-          <label>${isEn ? 'Message' : '咨询内容'}</label>
-          <textarea placeholder="${isEn ? 'Describe your needs...' : '请描述您的需求...'}" required></textarea>
-        </div>
-        <button type="submit" class="submit-btn">${isEn ? 'Send Message' : '发送咨询'}</button>
-      </form>
-    </div>
-  </div>
-</section>
-
-<footer>
-  <div class="footer-links">
-    <a href="#">${isEn ? 'Privacy Policy' : '隐私政策'}</a>
-    <a href="#">${isEn ? 'Terms of Service' : '服务条款'}</a>
-    <a href="#">${isEn ? 'Disclaimer' : '免责声明'}</a>
-    <a href="#contact">${isEn ? 'Contact' : '联系我们'}</a>
-  </div>
-  <p>© ${new Date().getFullYear()} ${business_name}. ${isEn ? 'All rights reserved.' : '版权所有。'}</p>
-</footer>
-
-<div class="wa-float">
-  <a href="https://wa.me/" class="wa-btn" target="_blank" rel="noopener" aria-label="WhatsApp">
-    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
-    </svg>
-  </a>
-</div>
-
-<script>
-  // FAQ accordion
-  document.querySelectorAll('.faq-q').forEach(q => {
-    q.addEventListener('click', () => {
-      const item = q.parentElement;
-      const isOpen = item.classList.contains('open');
-      document.querySelectorAll('.faq-item').forEach(i => i.classList.remove('open'));
-      if (!isOpen) item.classList.add('open');
-    });
-  });
-
-  // Form submit
-  function handleSubmit(e) {
-    e.preventDefault();
-    const btn = e.target.querySelector('.submit-btn');
-    btn.textContent = '${isEn ? 'Sent! ✓' : '已发送 ✓'}';
-    btn.style.background = '#10b981';
-    setTimeout(() => {
-      btn.textContent = '${isEn ? 'Send Message' : '发送咨询'}';
-      btn.style.background = '';
-      e.target.reset();
-    }, 3000);
-  }
-
-  // Smooth scroll
-  document.querySelectorAll('a[href^="#"]').forEach(a => {
-    a.addEventListener('click', e => {
-      const target = document.querySelector(a.getAttribute('href'));
-      if (target) { e.preventDefault(); target.scrollIntoView({ behavior: 'smooth' }); }
-    });
-  });
-</script>
-</body>
-</html>`;
+// ─── New AI Functions ────────────────────────────────────────────────────────
+async function handleSuggestKeywords(request, env, user) {
+  let body;
+  try { body = await request.json(); } catch { return errorResponse('请求格式错误', 400); }
+  const { business_name = '', service_description = '', target_market = '', lang = 'zh' } = body;
+  const prompt = `你是SEO关键词专家。\n业务：${business_name}\n描述：${service_description}\n市场：${target_market}\n\n生成20个精准SEO关键词，输出JSON数组，每项含：keyword, intent(搜索意图), competition(low/medium/high), score(1-10)\n只输出JSON数组。`;
+  try {
+    const result = await callAI(env, prompt);
+    let keywords = [];
+    try { const m = result.match(/\[[\s\S]*\]/); keywords = m ? JSON.parse(m[0]) : []; } catch {}
+    return jsonResponse({ success: true, keywords });
+  } catch (e) { return errorResponse(`关键词建议失败: ${e.message}`, 500); }
 }
 
-function getTemplateColors(template) {
-  const colorMap = {
-    'law-firm':    { primary: '#1e3a5f', secondary: '#2d5986', accent: '#c9a84c' },
-    'immigration': { primary: '#1a4731', secondary: '#2d6a4f', accent: '#74c69d' },
-    'consulting':  { primary: '#1e293b', secondary: '#334155', accent: '#3b82f6' },
-    'saas':        { primary: '#4f46e5', secondary: '#7c3aed', accent: '#06b6d4' },
-    'ecommerce':   { primary: '#dc2626', secondary: '#b91c1c', accent: '#f59e0b' },
-    'local-service': { primary: '#0369a1', secondary: '#0284c7', accent: '#38bdf8' },
-    'education':   { primary: '#7c3aed', secondary: '#6d28d9', accent: '#f59e0b' },
-    'healthcare':  { primary: '#0f766e', secondary: '#0d9488', accent: '#34d399' },
-  };
-  return colorMap[template] || colorMap['consulting'];
+async function handleWriteAssist(request, env, user) {
+  let body;
+  try { body = await request.json(); } catch { return errorResponse('请求格式错误', 400); }
+  const { section_title = '', section_type = 'description', context = '', tone = 'professional', lang = 'zh' } = body;
+  const toneMap = { professional: '专业严谨', friendly: '亲切友好', persuasive: '说服力强', technical: '技术专业' };
+  const typeMap = { description: '产品/服务描述', benefits: '优势列表', testimonial: '客户评价', cta: '行动号召' };
+  const prompt = `你是营销文案写手。\n版块：${section_title}\n类型：${typeMap[section_type]||section_type}\n背景：${context}\n语气：${toneMap[tone]||tone}\n语言：${lang==='zh'?'中文':'English'}\n\n生成该版块的HTML片段（含h2/p/ul等标签），150-300字，只输出HTML片段。`;
+  try {
+    const content = await callAI(env, prompt);
+    return jsonResponse({ success: true, content });
+  } catch (e) { return errorResponse(`写作辅助失败: ${e.message}`, 500); }
+}
+
+async function handleGetPresets(request, env) {
+  const presets = [
+    { id: 'legal_cn', name: '中国法律服务', industry: 'legal', lang: 'zh', country: 'CN', template: 'professional' },
+    { id: 'legal_us', name: 'US Immigration Law', industry: 'legal', lang: 'en', country: 'US', template: 'modern' },
+    { id: 'medical_cn', name: '中国医疗健康', industry: 'medical', lang: 'zh', country: 'CN', template: 'clean' },
+    { id: 'ecommerce_en', name: 'Global E-commerce', industry: 'ecommerce', lang: 'en', country: 'US', template: 'modern' },
+    { id: 'education_cn', name: '教育培训机构', industry: 'education', lang: 'zh', country: 'CN', template: 'modern' },
+    { id: 'finance_cn', name: '金融理财服务', industry: 'finance', lang: 'zh', country: 'CN', template: 'professional' },
+    { id: 'realestate_cn', name: '房产中介', industry: 'realestate', lang: 'zh', country: 'CN', template: 'modern' },
+    { id: 'tech_en', name: 'Tech & SaaS', industry: 'tech', lang: 'en', country: 'US', template: 'modern' },
+    { id: 'beauty_cn', name: '美容美发', industry: 'beauty', lang: 'zh', country: 'CN', template: 'creative' },
+    { id: 'fitness_en', name: 'Fitness & Gym', industry: 'fitness', lang: 'en', country: 'US', template: 'modern' },
+    { id: 'travel_en', name: 'Travel & Tourism', industry: 'travel', lang: 'en', country: 'US', template: 'creative' },
+    { id: 'restaurant_en', name: 'Restaurant & Food', industry: 'restaurant', lang: 'en', country: 'US', template: 'creative' },
+  ];
+  return jsonResponse({ success: true, presets });
+}
+
+async function handleSEOStatus(request, env) {
+  try {
+    const stats = await env.DB.prepare(`SELECT COUNT(*) as total, SUM(CASE WHEN indexed=1 THEN 1 ELSE 0 END) as indexed, SUM(CASE WHEN noindex=0 AND status='published' THEN 1 ELSE 0 END) as indexable, SUM(CASE WHEN noindex=1 THEN 1 ELSE 0 END) as noindex FROM pages`).first();
+    return jsonResponse({ success: true, ...stats });
+  } catch { return jsonResponse({ success: true, total: 0, indexed: 0, indexable: 0, noindex: 0 }); }
+}
+
+async function handleSEOSubmitAll(request, env, user) {
+  const privateKey = env.GOOGLE_PRIVATE_KEY;
+  const clientEmail = env.GOOGLE_CLIENT_EMAIL;
+  if (!privateKey || !clientEmail) return errorResponse('Google API 凭证未配置', 500);
+  const baseUrl = env.SITE_URL || 'https://aiclawchuhai.shop';
+  const rows = await env.DB.prepare('SELECT id, slug FROM pages WHERE status="published" AND noindex=0 AND indexed=0 LIMIT 200').all();
+  const pages = rows.results || [];
+  if (!pages.length) return jsonResponse({ success: true, message: '无需提交', total: 0, success_count: 0, failed_count: 0 });
+  let accessToken;
+  try { accessToken = await getGoogleAccessToken(clientEmail, privateKey); } catch (e) { return errorResponse(`获取令牌失败: ${e.message}`, 500); }
+  let successCount = 0, failedCount = 0;
+  for (const page of pages) {
+    try {
+      const resp = await fetch('https://indexing.googleapis.com/v3/urlNotifications:publish', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` }, body: JSON.stringify({ url: `${baseUrl}/${page.slug}`, type: 'URL_UPDATED' }) });
+      if (resp.ok) { await env.DB.prepare('UPDATE pages SET indexed=1, indexed_at=datetime("now") WHERE id=?').bind(page.id).run(); successCount++; } else { failedCount++; }
+    } catch { failedCount++; }
+  }
+  return jsonResponse({ success: true, total: pages.length, success_count: successCount, failed_count: failedCount });
+}
+
+async function handleSEOSubmitUrl(request, env, user) {
+  let body;
+  try { body = await request.json(); } catch { return errorResponse('请求格式错误', 400); }
+  const { url } = body;
+  if (!url) return errorResponse('URL不能为空', 400);
+  const privateKey = env.GOOGLE_PRIVATE_KEY;
+  const clientEmail = env.GOOGLE_CLIENT_EMAIL;
+  if (!privateKey || !clientEmail) return errorResponse('Google API 凭证未配置', 500);
+  let accessToken;
+  try { accessToken = await getGoogleAccessToken(clientEmail, privateKey); } catch (e) { return errorResponse(`获取令牌失败: ${e.message}`, 500); }
+  const resp = await fetch('https://indexing.googleapis.com/v3/urlNotifications:publish', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` }, body: JSON.stringify({ url, type: 'URL_UPDATED' }) });
+  const data = await resp.json();
+  if (!resp.ok) return errorResponse(data.error?.message || '提交失败', 400);
+  return jsonResponse({ success: true, url, result: data });
+}
+
+async function sha256Simple(message) {
+  const msgBuffer = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }

@@ -281,6 +281,10 @@ textarea.form-control { min-height: 100px; resize: vertical; }
       <div class="nav-item" data-page="editor">
         <span class="nav-icon">💻</span> 代码编辑器
       </div>
+      <div class="nav-section">域名管理</div>
+      <div class="nav-item" data-page="domains">
+        <span class="nav-icon">🌐</span> 域名管理
+      </div>
       <div class="nav-section">自动化</div>
       <div class="nav-item" data-page="rpa">
         <span class="nav-icon">🤖</span> RPA 定时任务
@@ -445,7 +449,7 @@ function showPage(page) {
   });
   const titles = {
     dashboard: '控制台', generate: 'AI 生成落地页', pages: '页面管理',
-    editor: '代码编辑器', rpa: 'RPA 定时任务', seo: 'SEO / 谷歌收录',
+    editor: '代码编辑器', domains: '域名管理', rpa: 'RPA 定时任务', seo: 'SEO / 谷歌收录',
     config: '系统配置', logs: '操作日志'
   };
   document.getElementById('page-title').textContent = titles[page] || page;
@@ -454,7 +458,7 @@ function showPage(page) {
 
   const renderers = {
     dashboard: renderDashboard, generate: renderGenerate, pages: renderPages,
-    editor: renderEditor, rpa: renderRPA, seo: renderSEO,
+    editor: renderEditor, domains: renderDomains, rpa: renderRPA, seo: renderSEO,
     config: renderConfig, logs: renderLogs
   };
   if (renderers[page]) renderers[page]();
@@ -1598,3 +1602,177 @@ renderGenerate = function() {
   originalRenderGenerate();
   loadAIPresets();
 };
+
+// ─── Domains ──────────────────────────────────────────────────────────────
+async function renderDomains() {
+  let domains = [], subdomains = [];
+  try { const r = await api('GET', '/api/domains'); domains = r.data || []; } catch {}
+  try { const r = await api('GET', '/api/domains/subdomains'); subdomains = r.data || []; } catch {}
+  document.getElementById('content').innerHTML = `
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🌐 主域名管理</div>
+        <button class="btn btn-primary btn-sm" onclick="showAddDomainModal()">+ 添加域名</button>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>域名</th><th>类型</th><th>SSL</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>${domains.map(d => `<tr>
+          <td><strong>${escHtml(d.domain)}</strong></td>
+          <td><span class="badge badge-info">${escHtml(d.type)}</span></td>
+          <td>${d.ssl ? '✅' : '❌'}</td>
+          <td><span class="badge ${d.status==='active'?'badge-success':'badge-gray'}">${escHtml(d.status)}</span></td>
+          <td><button class="btn btn-danger btn-sm" onclick="deleteDomain(${d.id})">删除</button></td>
+        </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:20px">暂无域名</td></tr>'}
+        </tbody>
+      </table></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🔗 子域名管理</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-outline btn-sm" onclick="showCreateSubdomainModal()">+ 创建</button>
+          <button class="btn btn-success btn-sm" onclick="showGenerateSubdomainModal()">⚡ 批量生成</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>子域名</th><th>描述</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>${subdomains.slice(0,30).map(s => `<tr>
+          <td><strong>${escHtml(s.full_domain)}</strong></td>
+          <td style="color:var(--text-muted);font-size:13px">${escHtml(s.description||'')}</td>
+          <td><span class="badge ${s.status==='active'?'badge-success':'badge-gray'}">${escHtml(s.status)}</span></td>
+          <td><button class="btn btn-danger btn-sm" onclick="deleteSubdomain(${s.id})">删除</button></td>
+        </tr>`).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:20px">暂无子域名</td></tr>'}
+        </tbody>
+      </table></div>
+      ${subdomains.length > 30 ? `<div style="text-align:center;padding:8px;font-size:13px;color:var(--text-muted)">显示前30条，共 ${subdomains.length} 条</div>` : ''}
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <div class="card-title">☁️ Cloudflare Zones</div>
+      <button class="btn btn-outline btn-sm" onclick="loadCFZones()">🔄 加载</button>
+    </div>
+    <div id="cf-zones-list"><p style="color:var(--text-muted);font-size:13px">点击"加载"按钮获取 Cloudflare Zone 列表</p></div>
+  </div>`;
+}
+
+async function showAddDomainModal() {
+  openModal('🌐 添加主域名', `
+    <div class="form-group">
+      <label class="form-label">域名</label>
+      <input type="text" class="form-control" id="add-domain" placeholder="example.com">
+    </div>
+    <div class="form-group">
+      <label class="form-label">类型</label>
+      <select class="form-control" id="add-domain-type">
+        <option value="custom">自定义域名</option>
+        <option value="primary">主域名</option>
+        <option value="secondary">次域名</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Zone ID（可选）</label>
+      <input type="text" class="form-control" id="add-zone-id" placeholder="Cloudflare Zone ID">
+    </div>
+    <div class="form-group">
+      <label class="form-label">SSL</label>
+      <select class="form-control" id="add-ssl">
+        <option value="1">启用</option>
+        <option value="0">禁用</option>
+      </select>
+    </div>`, async () => {
+    try {
+      await api('POST', '/api/domains', {
+        domain: document.getElementById('add-domain').value,
+        type: document.getElementById('add-domain-type').value,
+        zone_id: document.getElementById('add-zone-id').value,
+        ssl: parseInt(document.getElementById('add-ssl').value)
+      });
+      toast('域名添加成功', 'success'); closeModal(); renderDomains();
+    } catch (e) { toast('添加失败: ' + e.message, 'error'); }
+  });
+}
+
+async function deleteDomain(id) {
+  if (!confirm('确定删除此域名？')) return;
+  try { await api('DELETE', '/api/domains/' + id); toast('已删除', 'success'); renderDomains(); }
+  catch (e) { toast('删除失败: ' + e.message, 'error'); }
+}
+
+async function showCreateSubdomainModal() {
+  openModal('🔗 创建子域名', `
+    <div class="form-group">
+      <label class="form-label">前缀</label>
+      <input type="text" class="form-control" id="sub-prefix" placeholder="law">
+    </div>
+    <div class="form-group">
+      <label class="form-label">基础域名</label>
+      <input type="text" class="form-control" id="sub-base" placeholder="aiclawchuhai.shop">
+    </div>
+    <div class="form-group">
+      <label class="form-label">描述（可选）</label>
+      <input type="text" class="form-control" id="sub-desc" placeholder="法律服务落地页">
+    </div>`, async () => {
+    try {
+      await api('POST', '/api/domains/subdomains', {
+        prefix: document.getElementById('sub-prefix').value,
+        base_domain: document.getElementById('sub-base').value,
+        description: document.getElementById('sub-desc').value
+      });
+      toast('子域名创建成功', 'success'); closeModal(); renderDomains();
+    } catch (e) { toast('创建失败: ' + e.message, 'error'); }
+  });
+}
+
+async function showGenerateSubdomainModal() {
+  openModal('⚡ 批量生成子域名', `
+    <div class="form-group">
+      <label class="form-label">基础域名</label>
+      <input type="text" class="form-control" id="gen-base" placeholder="aiclawchuhai.shop">
+    </div>
+    <div class="form-group">
+      <label class="form-label">生成数量（最多50个）</label>
+      <input type="number" class="form-control" id="gen-count" value="10" min="1" max="50">
+    </div>
+    <div class="form-group">
+      <label class="form-label">前缀类型</label>
+      <select class="form-control" id="gen-type">
+        <option value="random">随机前缀</option>
+        <option value="custom">自定义前缀</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">自定义前缀（每行一个，选自定义时生效）</label>
+      <textarea class="form-control" id="gen-prefixes" placeholder="law&#10;immigration&#10;visa&#10;consulting" style="min-height:80px"></textarea>
+    </div>`, async () => {
+    try {
+      const r = await api('POST', '/api/domains/generate-subdomains', {
+        base_domain: document.getElementById('gen-base').value,
+        count: parseInt(document.getElementById('gen-count').value),
+        prefix_type: document.getElementById('gen-type').value,
+        custom_prefixes: document.getElementById('gen-prefixes').value.split('\n').filter(Boolean)
+      });
+      toast(`成功生成 ${r.total} 个子域名`, 'success'); closeModal(); renderDomains();
+    } catch (e) { toast('生成失败: ' + e.message, 'error'); }
+  });
+}
+
+async function deleteSubdomain(id) {
+  if (!confirm('确定删除此子域名？')) return;
+  try { await api('DELETE', '/api/domains/subdomains/' + id); toast('已删除', 'success'); renderDomains(); }
+  catch (e) { toast('删除失败: ' + e.message, 'error'); }
+}
+
+async function loadCFZones() {
+  try {
+    const r = await api('GET', '/api/domains/cf-zones');
+    const html = (r.zones || []).map(z => `
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+        <strong style="flex:1">${escHtml(z.name)}</strong>
+        <span class="badge badge-info">${escHtml(z.status)}</span>
+        <code style="font-size:12px;color:var(--text-muted);background:var(--bg);padding:2px 6px;border-radius:4px">${escHtml(z.id)}</code>
+      </div>`).join('');
+    document.getElementById('cf-zones-list').innerHTML = html || '<p style="color:var(--text-muted)">暂无 Zone</p>';
+  } catch (e) { toast('加载失败: ' + e.message, 'error'); }
+}
