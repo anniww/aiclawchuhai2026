@@ -1,0 +1,20 @@
+name = "aiclawchuhai-api"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+account_id = "53b7b68edccc6370375ce7cfa9eb8300"
+
+[vars]
+ADMIN_USERNAME = "admin"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aiclawchuhai2026db"
+database_id = "6161ace2-20d0-442b-98f4-d98c7c28216d"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "00366001e70f4fc9b12daab1f7cba4c8"
+
+[triggers]
+crons = ["0 2 * * *"]
