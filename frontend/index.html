@@ -602,6 +602,12 @@ function renderGenerate() {
           <input type="text" class="form-control" id="g-phone" placeholder="例：+86 021-12345678">
         </div>
         <div class="form-group">
+          <label class="form-label">AI 预设 (可选)</label>
+          <select class="form-control" id="g-preset" onchange="applyPreset(this.value)">
+            <option value="">-- 选择预设 --</option>
+          </select>
+        </div>
+        <div class="form-group">
           <label class="form-label">自定义提示词（可选，留空使用默认）</label>
           <textarea class="form-control" id="g-prompt" placeholder="可在此输入自定义 AI 提示词..."></textarea>
         </div>
@@ -940,6 +946,12 @@ function renderEditorWithPage(page) {
         <a href="${API_BASE}/p/${page.slug}" target="_blank" class="btn btn-sm btn-outline">👁️ 预览</a>
         <button class="btn btn-sm btn-success" onclick="saveEditor()">💾 保存</button>
         <button class="btn btn-sm btn-primary" onclick="publishFromEditor(${page.id})">🚀 发布</button>
+        <div style="width:100%;height:1px;background:var(--border);margin:8px 0"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;width:100%">
+          <button class="btn btn-sm btn-warning" onclick="showAIOptimizeModal()">✨ AI 优化</button>
+          <button class="btn btn-sm btn-info" onclick="showAIWriteAssistModal()">✍️ AI 写作辅助</button>
+          <button class="btn btn-sm btn-outline" onclick="showAISuggestKeywordsModal()">🔍 关键词建议</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1416,3 +1428,173 @@ init();
 </script>
 </body>
 </html>
+
+// ─── AI Enhanced Functions ─────────────────────────────────────────────────
+let aiPresets = [];
+
+async function loadAIPresets() {
+  try {
+    aiPresets = await api('GET', '/api/ai/presets');
+    const select = document.getElementById('g-preset');
+    if (select) {
+      aiPresets.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = `${p.name} (${p.category})`;
+        select.appendChild(opt);
+      });
+    }
+  } catch (err) { console.error('Failed to load AI presets:', err); }
+}
+
+function applyPreset(id) {
+  const preset = aiPresets.find(p => p.id === id);
+  if (preset) {
+    document.getElementById('g-prompt').value = preset.prompt;
+    toast(`已应用预设: ${preset.name}`, 'info');
+  }
+}
+
+async function showAIOptimizeModal() {
+  const code = document.getElementById('code-editor').value;
+  openModal('✨ AI 优化内容', `
+    <div class="form-group">
+      <label class="form-label">优化类型</label>
+      <select class="form-control" id="opt-type">
+        <option value="general">通用优化 (提高可读性与转化率)</option>
+        <option value="seo">SEO 优化 (关键词、Meta、结构)</option>
+        <option value="copywriting">文案优化 (更具说服力)</option>
+        <option value="mobile">移动端适配优化</option>
+      </select>
+    </div>
+    <div style="font-size:13px;color:var(--text-muted)">AI 将分析并重写您的 HTML 内容，保留结构并优化文案。</div>
+  `, async () => {
+    const type = document.getElementById('opt-type').value;
+    const btn = document.getElementById('modal-confirm-btn');
+    btn.textContent = '优化中...';
+    btn.disabled = true;
+    try {
+      const data = await api('POST', '/api/ai/optimize', {
+        html_content: code,
+        optimization_type: type
+      });
+      document.getElementById('code-editor').value = data.optimized_content;
+      updatePreview();
+      toast('内容已优化', 'success');
+      closeModal();
+    } catch (err) { toast('优化失败: ' + err.message, 'error'); }
+  });
+}
+
+async function showAIWriteAssistModal() {
+  openModal('✍️ AI 写作辅助', `
+    <div class="form-group">
+      <label class="form-label">版块标题</label>
+      <input type="text" class="form-control" id="wa-title" placeholder="例如：我们的核心优势">
+    </div>
+    <div class="form-group">
+      <label class="form-label">版块类型</label>
+      <select class="form-control" id="wa-type">
+        <option value="description">产品/服务描述</option>
+        <option value="benefits">优势列表</option>
+        <option value="testimonial">客户评价</option>
+        <option value="cta">行动号召 (CTA)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">背景信息 (可选)</label>
+      <textarea class="form-control" id="wa-context" placeholder="提供一些关于该版块的背景信息..."></textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">语气</label>
+        <select class="form-control" id="wa-tone">
+          <option value="professional">专业</option>
+          <option value="friendly">友好</option>
+          <option value="persuasive">说服力</option>
+          <option value="technical">技术性</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">语言</label>
+        <select class="form-control" id="wa-lang">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+    </div>
+  `, async () => {
+    const btn = document.getElementById('modal-confirm-btn');
+    btn.textContent = '生成中...';
+    btn.disabled = true;
+    try {
+      const data = await api('POST', '/api/ai/write-assist', {
+        section_title: document.getElementById('wa-title').value,
+        section_type: document.getElementById('wa-type').value,
+        context: document.getElementById('wa-context').value,
+        tone: document.getElementById('wa-tone').value,
+        lang: document.getElementById('wa-lang').value
+      });
+      
+      // 将生成的内容插入到编辑器光标位置或末尾
+      const editor = document.getElementById('code-editor');
+      const start = editor.selectionStart;
+      const end = editor.selectionEnd;
+      const text = editor.value;
+      editor.value = text.substring(0, start) + data.content + text.substring(end);
+      
+      updatePreview();
+      toast('内容已生成并插入', 'success');
+      closeModal();
+    } catch (err) { toast('生成失败: ' + err.message, 'error'); }
+  });
+}
+
+async function showAISuggestKeywordsModal() {
+  if (!editorPage) return;
+  openModal('🔍 AI 关键词建议', `
+    <div class="form-group">
+      <label class="form-label">业务名称</label>
+      <input type="text" class="form-control" id="sk-name" value="${escHtml(editorPage.title)}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">服务描述</label>
+      <textarea class="form-control" id="sk-desc" placeholder="简要描述您的服务..."></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">目标市场</label>
+      <input type="text" class="form-control" id="sk-market" placeholder="例如：上海法律咨询市场">
+    </div>
+  `, async () => {
+    const btn = document.getElementById('modal-confirm-btn');
+    btn.textContent = '分析中...';
+    btn.disabled = true;
+    try {
+      const data = await api('POST', '/api/ai/suggest-keywords', {
+        business_name: document.getElementById('sk-name').value,
+        service_description: document.getElementById('sk-desc').value,
+        target_market: document.getElementById('sk-market').value
+      });
+      
+      let html = '<div class="table-wrap"><table><thead><tr><th>关键词</th><th>意图</th><th>竞争度</th><th>评分</th></tr></thead><tbody>';
+      data.keywords.forEach(k => {
+        html += `<tr>
+          <td style="font-weight:600">${escHtml(k.keyword)}</td>
+          <td><span class="badge badge-info">${escHtml(k.intent)}</span></td>
+          <td>${escHtml(k.competition)}</td>
+          <td><span class="badge badge-success">${k.score}/10</span></td>
+        </tr>`;
+      });
+      html += '</tbody></table></div>';
+      
+      openModal('🔍 关键词建议结果', html);
+    } catch (err) { toast('分析失败: ' + err.message, 'error'); }
+  });
+}
+
+// 在 renderGenerate 中调用 loadAIPresets
+const originalRenderGenerate = renderGenerate;
+renderGenerate = function() {
+  originalRenderGenerate();
+  loadAIPresets();
+};

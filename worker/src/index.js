@@ -101,7 +101,7 @@ async function ensureDB(env) {
   }
 }
 import { handlePages } from './pages.js';
-import { handleAI } from './ai.js';
+import { handleAIEnhanced } from './ai-enhanced.js';
 import { handleSEO } from './seo.js';
 import { handleRPA } from './rpa.js';
 import { handleScheduled } from './scheduled.js';
@@ -147,7 +147,7 @@ export default {
           return await handlePages(request, env, path, authResult.user);
         }
         if (path.startsWith('/api/ai')) {
-          return await handleAI(request, env, path);
+          return await handleAIEnhanced(request, env, path);
         }
         if (path.startsWith('/api/seo')) {
           return await handleSEO(request, env, path);
