@@ -4,6 +4,102 @@
  */
 
 import { handleAuth } from './auth.js';
+
+// ─── DB Auto-Init ─────────────────────────────────────────────────────────────
+// DB init - runs once per Worker isolate startup
+let dbInitialized = false;
+async function ensureDB(env) {
+  if (dbInitialized) return;
+  dbInitialized = true;
+  try {
+    // Create tables if not exist
+    await env.DB.exec(`
+      CREATE TABLE IF NOT EXISTS pages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        slug TEXT UNIQUE NOT NULL,
+        title TEXT NOT NULL,
+        html_content TEXT DEFAULT '',
+        keywords TEXT DEFAULT '',
+        description TEXT DEFAULT '',
+        meta_title TEXT DEFAULT '',
+        meta_desc TEXT DEFAULT '',
+        lang TEXT DEFAULT 'zh',
+        country TEXT DEFAULT 'CN',
+        city TEXT DEFAULT '',
+        status TEXT DEFAULT 'draft',
+        noindex INTEGER DEFAULT 0,
+        template TEXT DEFAULT 'default',
+        views INTEGER DEFAULT 0,
+        indexed INTEGER DEFAULT 0,
+        indexed_at TEXT,
+        has_password INTEGER DEFAULT 0,
+        password_hash TEXT,
+        ip_whitelist TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS rpa_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        config TEXT DEFAULT '{}',
+        cron_expr TEXT DEFAULT '0 2 * * *',
+        status TEXT DEFAULT 'active',
+        last_run TEXT,
+        next_run TEXT,
+        run_count INTEGER DEFAULT 0,
+        last_result TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user TEXT DEFAULT 'admin',
+        action TEXT NOT NULL,
+        detail TEXT DEFAULT '',
+        ip TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS system_config (
+        key TEXT PRIMARY KEY,
+        value TEXT DEFAULT ''
+      );
+    `);
+    // Add missing columns to pages (ignore errors if already exist)
+    const alterCols = [
+      "ALTER TABLE pages ADD COLUMN lang TEXT DEFAULT 'zh'",
+      "ALTER TABLE pages ADD COLUMN country TEXT DEFAULT 'CN'",
+      "ALTER TABLE pages ADD COLUMN city TEXT DEFAULT ''",
+      "ALTER TABLE pages ADD COLUMN noindex INTEGER DEFAULT 0",
+      "ALTER TABLE pages ADD COLUMN template TEXT DEFAULT 'default'",
+      "ALTER TABLE pages ADD COLUMN indexed INTEGER DEFAULT 0",
+      "ALTER TABLE pages ADD COLUMN indexed_at TEXT",
+      "ALTER TABLE pages ADD COLUMN has_password INTEGER DEFAULT 0",
+      "ALTER TABLE pages ADD COLUMN password_hash TEXT",
+      "ALTER TABLE pages ADD COLUMN ip_whitelist TEXT DEFAULT ''",
+      "ALTER TABLE pages ADD COLUMN meta_title TEXT DEFAULT ''",
+      "ALTER TABLE pages ADD COLUMN meta_desc TEXT DEFAULT ''",
+    ];
+    for (const sql of alterCols) {
+      try { await env.DB.exec(sql); } catch(e) { /* column already exists */ }
+    }
+    // Insert default config
+    await env.DB.exec(`
+      INSERT OR IGNORE INTO system_config (key, value) VALUES
+        ('site_url',''),('site_name','AI Landing Page System'),
+        ('admin_email',''),('whatsapp_number',''),
+        ('google_analytics_id',''),('facebook_pixel_id',''),
+        ('default_lang','zh'),('default_country','CN'),
+        ('auto_index','1'),('footer_text','');
+      INSERT OR IGNORE INTO rpa_tasks (name, type, config, cron_expr, status) VALUES
+        ('每日自动提交Google收录','submit_sitemap','{}','0 3 * * *','active'),
+        ('每日自动发布草稿','auto_publish','{"max_publish":5}','0 2 * * *','paused'),
+        ('死链检测','dead_link_check','{}','0 4 * * 1','active');
+    `);
+    dbInitialized = true;
+  } catch(e) {
+    console.error('DB init error:', e.message);
+  }
+}
 import { handlePages } from './pages.js';
 import { handleAI } from './ai.js';
 import { handleSEO } from './seo.js';
@@ -20,6 +116,9 @@ export default {
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
     }
+
+    // Auto-initialize database on first request
+    await ensureDB(env);
 
     try {
       // Public routes (no auth required)
@@ -218,6 +317,79 @@ ${urls}
 
 // ─── System Handler ────────────────────────────────────────────────────────
 async function handleSystem(request, env, path) {
+  // Manual DB init endpoint - call once after deployment
+  if (path === '/api/system/init' && request.method === 'POST') {
+    const results = [];
+    const run = async (sql) => { await env.DB.prepare(sql).run(); };
+    
+    // Step 1: Recreate pages table with full schema
+    try { await run('DROP TABLE IF EXISTS pages_old'); } catch(e) {}
+    try {
+      await run('ALTER TABLE pages RENAME TO pages_old');
+      results.push('Renamed pages to pages_old');
+    } catch(e) { results.push('Rename pages: ' + e.message); }
+    
+    try {
+      await run(`CREATE TABLE pages (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL, html_content TEXT DEFAULT '', keywords TEXT DEFAULT '', description TEXT DEFAULT '', meta_title TEXT DEFAULT '', meta_desc TEXT DEFAULT '', lang TEXT DEFAULT 'zh', country TEXT DEFAULT 'CN', city TEXT DEFAULT '', status TEXT DEFAULT 'draft', noindex INTEGER DEFAULT 0, template TEXT DEFAULT 'default', views INTEGER DEFAULT 0, indexed INTEGER DEFAULT 0, indexed_at TEXT, has_password INTEGER DEFAULT 0, password_hash TEXT, ip_whitelist TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')))`);
+      results.push('Created new pages table');
+    } catch(e) { results.push('Create pages: ' + e.message); }
+    
+    // Copy data from old table
+    try {
+      await run('INSERT OR IGNORE INTO pages (id,slug,title,html_content,keywords,description,status,created_at,updated_at) SELECT id,slug,title,html_content,keywords,description,status,created_at,updated_at FROM pages_old');
+      results.push('Copied data from pages_old');
+    } catch(e) { results.push('Copy data: ' + e.message); }
+    try { await run('DROP TABLE IF EXISTS pages_old'); results.push('Dropped pages_old'); } catch(e) {}
+    
+    // Step 2: Fix rpa_tasks table
+    try { await run('DROP TABLE IF EXISTS rpa_tasks_old'); } catch(e) {}
+    try {
+      await run('ALTER TABLE rpa_tasks RENAME TO rpa_tasks_old');
+      results.push('Renamed rpa_tasks to rpa_tasks_old');
+    } catch(e) { results.push('Rename rpa_tasks: ' + e.message); }
+    try {
+      await run(`CREATE TABLE IF NOT EXISTS rpa_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, type TEXT NOT NULL, config TEXT DEFAULT '{}', cron_expr TEXT DEFAULT '0 2 * * *', status TEXT DEFAULT 'active', last_run TEXT, next_run TEXT, run_count INTEGER DEFAULT 0, last_result TEXT, created_at TEXT DEFAULT (datetime('now')))`);
+      results.push('Created rpa_tasks table');
+    } catch(e) { results.push('Create rpa_tasks: ' + e.message); }
+    try { await run('DROP TABLE IF EXISTS rpa_tasks_old'); } catch(e) {}
+    
+    // Step 3: Create audit_logs
+    try {
+      await run(`CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT DEFAULT 'admin', action TEXT NOT NULL, detail TEXT DEFAULT '', ip TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')))`);
+      results.push('Created audit_logs');
+    } catch(e) { results.push('audit_logs: ' + e.message); }
+    
+    // Step 4: Create system_config
+    try {
+      await run(`CREATE TABLE IF NOT EXISTS system_config (key TEXT PRIMARY KEY, value TEXT DEFAULT '')`);
+      results.push('Created system_config');
+    } catch(e) { results.push('system_config: ' + e.message); }
+    
+    // Step 5: Insert default data
+    const configInserts = [
+      ['site_url',''],['site_name','AI Landing Page System'],['admin_email',''],
+      ['whatsapp_number',''],['google_analytics_id',''],['facebook_pixel_id',''],
+      ['default_lang','zh'],['default_country','CN'],['auto_index','1'],['footer_text','']
+    ];
+    for (const [k,v] of configInserts) {
+      try { await env.DB.prepare('INSERT OR IGNORE INTO system_config (key, value) VALUES (?, ?)').bind(k,v).run(); } catch(e) {}
+    }
+    results.push('Inserted default config');
+    
+    const rpaTasks = [
+      ['每日自动提交Google收录','submit_sitemap','{}','0 3 * * *','active'],
+      ['每日自动发布草稿','auto_publish','{"max_publish":5}','0 2 * * *','paused'],
+      ['死链检测','dead_link_check','{}','0 4 * * 1','active']
+    ];
+    for (const [name,type,config,cron,status] of rpaTasks) {
+      try { await env.DB.prepare('INSERT OR IGNORE INTO rpa_tasks (name,type,config,cron_expr,status) VALUES (?,?,?,?,?)').bind(name,type,config,cron,status).run(); } catch(e) {}
+    }
+    results.push('Inserted default RPA tasks');
+    
+    dbInitialized = true;
+    return jsonResponse({ success: true, results });
+  }
+  
   if (path === '/api/system/stats' && request.method === 'GET') {
     const stats = await env.DB.prepare(`
       SELECT
