@@ -358,16 +358,21 @@ let editorPage = null;
 
 // ─── Init ──────────────────────────────────────────────────────────────────
 async function init() {
+  console.log('[init] 开始初始化', { hasToken: !!authToken });
   if (!authToken) {
+    console.log('[init] 没有 Token，跳转到登录页面');
     showLogin();
     return;
   }
   try {
+    console.log('[init] 正在验证 Token...');
     const res = await api('GET', '/api/auth/me');
+    console.log('[init] Token 验证成功', res);
     currentUser = res;
     showApp();
     showPage('dashboard');
-  } catch {
+  } catch (e) {
+    console.error('[init] Token 验证失败:', e);
     showLogin();
   }
 }
@@ -431,10 +436,13 @@ async function api(method, path, body = null, auth = true) {
   const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
 
+  console.log(`[API] ${method} ${API_BASE + path}`, { auth, hasToken: !!authToken });
   const res = await fetch(API_BASE + path, opts);
   const data = await res.json().catch(() => ({}));
 
+  console.log(`[API Response] ${method} ${path}:`, { status: res.status, ok: res.ok, data });
   if (!res.ok) {
+    console.error(`[API Error] ${method} ${path}: HTTP ${res.status}`, data);
     if (res.status === 401) { showLogin(); }
     throw new Error(data.error || `HTTP ${res.status}`);
   }
@@ -744,7 +752,10 @@ async function renderPages(page = 1, search = '', status = '') {
   let data = { pages: [], total: 0 };
   try {
     data = await api('GET', `/api/pages?page=${page}&limit=20&search=${encodeURIComponent(search)}&status=${status}`);
-  } catch {}
+  } catch (e) {
+    console.error('[renderPages] 获取页面列表失败:', e);
+    toast('获取页面列表失败: ' + e.message, 'error');
+  }
   pagesData = data;
 
   const rows = (data.pages || []).map(p => `
