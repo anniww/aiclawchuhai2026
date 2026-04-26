@@ -469,7 +469,14 @@ function showPage(page) {
     editor: renderEditor, domains: renderDomains, rpa: renderRPA, seo: renderSEO,
     config: renderConfig, logs: renderLogs
   };
-  if (renderers[page]) renderers[page]();
+  if (renderers[page]) {
+    try {
+      renderers[page]();
+    } catch (e) {
+      console.error(`[showPage] Error calling renderer for page '${page}':`, e);
+      document.getElementById('content').innerHTML = `<div style="padding:20px;color:red"><strong>Error:</strong> ${escHtml(e.message)}</div>`;
+    }
+  }
 }
 
 document.querySelectorAll('.nav-item').forEach(el => {
