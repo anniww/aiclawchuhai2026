@@ -1446,11 +1446,6 @@ if (savedTheme) {
 }
 
 // ─── Start ─────────────────────────────────────────────────────────────────
-init();
-</script>
-</body>
-</html>
-
 // ─── AI Enhanced Functions ─────────────────────────────────────────────────
 let aiPresets = [];
 
@@ -1794,3 +1789,7 @@ async function loadCFZones() {
     document.getElementById('cf-zones-list').innerHTML = html || '<p style="color:var(--text-muted)">暂无 Zone</p>';
   } catch (e) { toast('加载失败: ' + e.message, 'error'); }
 }
+init();
+</script>
+</body>
+</html>
