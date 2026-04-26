@@ -1056,7 +1056,13 @@ async function publishFromEditor(id) {
 // ─── RPA Tasks ─────────────────────────────────────────────────────────────
 async function renderRPA() {
   let tasks = [];
-  try { tasks = await api('GET', '/api/rpa/tasks'); } catch {}
+  try { 
+    const res = await api('GET', '/api/rpa/tasks');
+    tasks = res.data || res || [];
+  } catch (e) {
+    console.error('[renderRPA] 获取任务列表失败:', e);
+  }
+  tasks = Array.isArray(tasks) ? tasks : [];
 
   const rows = tasks.map(t => `
     <tr>
@@ -1357,7 +1363,13 @@ async function changePassword() {
 // ─── Logs ──────────────────────────────────────────────────────────────────
 async function renderLogs() {
   let logs = [];
-  try { logs = await api('GET', '/api/system/logs?limit=100'); } catch {}
+  try { 
+    const res = await api('GET', '/api/system/logs?limit=100');
+    logs = res.data || res || [];
+  } catch (e) {
+    console.error('[renderLogs] 获取日志列表失败:', e);
+  }
+  logs = Array.isArray(logs) ? logs : [];
 
   const rows = logs.map(l => `
     <tr>
@@ -1451,9 +1463,11 @@ let aiPresets = [];
 
 async function loadAIPresets() {
   try {
-    aiPresets = await api('GET', '/api/ai/presets');
+    const res = await api('GET', '/api/ai/presets');
+    aiPresets = res.data || res || [];
+    aiPresets = Array.isArray(aiPresets) ? aiPresets : [];
     const select = document.getElementById('g-preset');
-    if (select) {
+    if (select && aiPresets.length > 0) {
       aiPresets.forEach(p => {
         const opt = document.createElement('option');
         opt.value = p.id;
@@ -1619,8 +1633,20 @@ renderGenerate = function() {
 // ─── Domains ──────────────────────────────────────────────────────────────
 async function renderDomains() {
   let domains = [], subdomains = [];
-  try { const r = await api('GET', '/api/domains'); domains = r.data || []; } catch {}
-  try { const r = await api('GET', '/api/domains/subdomains'); subdomains = r.data || []; } catch {}
+  try { 
+    const r = await api('GET', '/api/domains');
+    domains = r.data || r || [];
+    domains = Array.isArray(domains) ? domains : [];
+  } catch (e) {
+    console.error('[renderDomains] 获取域名列表失败:', e);
+  }
+  try { 
+    const r = await api('GET', '/api/domains/subdomains');
+    subdomains = r.data || r || [];
+    subdomains = Array.isArray(subdomains) ? subdomains : [];
+  } catch (e) {
+    console.error('[renderDomains] 获取子域名列表失败:', e);
+  }
   document.getElementById('content').innerHTML = `
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
     <div class="card">
